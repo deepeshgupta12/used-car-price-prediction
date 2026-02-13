@@ -7,13 +7,6 @@ from pandera import Check
 def schema_in() -> pa.DataFrameSchema:
     """
     India dataset (Cars.csv) schema contract.
-
-    Observed columns:
-    ['Name','Location','Year','Kilometers_Driven','Fuel_Type','Transmission','Owner_Type',
-     'Mileage','Engine','Power','Colour','Seats','No. of Doors','New_Price','Price']
-
-    Note: Year and Kilometers_Driven contain NaNs in this dataset.
-    We therefore use pandas nullable integer dtype "Int64" to allow missing values.
     """
     return pa.DataFrameSchema(
         {
@@ -41,12 +34,6 @@ def schema_in() -> pa.DataFrameSchema:
 def schema_us() -> pa.DataFrameSchema:
     """
     US dataset (used_cars.csv) schema contract.
-
-    Observed columns:
-    ['brand','model','model_year','milage','fuel_type','engine','transmission',
-     'ext_col','int_col','accident','clean_title','price']
-
-    Note: model_year includes at least one value 1974 in current dataset.
     """
     return pa.DataFrameSchema(
         {
@@ -68,30 +55,24 @@ def schema_us() -> pa.DataFrameSchema:
     )
 
 
-def _flag01_unknown() -> Check:
+def _flag01_unknown_or_selfname(colname: str) -> Check:
     """
-    TEMPLATE flags sometimes contain 'unknown' strings.
-    Allow: 0/1 as ints, '0'/'1' as strings, 'unknown', or missing.
-    We validate by converting to string and checking membership.
+    TEMPLATE flags contain values like:
+      0/1 (ints), '0'/'1' (strings), 'unknown',
+      and sometimes the column name itself (e.g. 'GDI' in column GDI).
+
+    Allow: 0/1/unknown/self-name or missing.
     """
-    allowed = {"0", "1", "unknown"}
+    allowed = {"0", "1", "unknown", colname.strip().lower()}
     return Check(
         lambda s: s.isna() | s.astype(str).str.strip().str.lower().isin(allowed),
-        name="flag_in_{0,1,unknown}",
+        name="flag_in_{0,1,unknown,self}",
     )
 
 
 def schema_template() -> pa.DataFrameSchema:
     """
     TEMPLATE dataset (test_final.xlsx) schema contract.
-
-    Observed columns:
-    ['id','brand','model','model_year','milage','fuel_type','transmission','ext_col','int_col',
-     'accident','clean_title','power','dispersion','battery','engine',
-     'GDI','DOHC','Turbo','MPFI','PDI','OHV','SOHC']
-
-    Note: Some flag columns (e.g., GDI) contain string value 'unknown'.
-    We keep them as strings for validation and will normalize to 0/1 later in V1.
     """
     return pa.DataFrameSchema(
         {
@@ -110,13 +91,15 @@ def schema_template() -> pa.DataFrameSchema:
             "dispersion": pa.Column(pa.Float, nullable=True, checks=Check.ge(0)),
             "battery": pa.Column(pa.Float, nullable=True, checks=Check.ge(0)),
             "engine": pa.Column(pa.String, nullable=True),
-            "GDI": pa.Column(pa.String, nullable=True, checks=_flag01_unknown()),
-            "DOHC": pa.Column(pa.String, nullable=True, checks=_flag01_unknown()),
-            "Turbo": pa.Column(pa.String, nullable=True, checks=_flag01_unknown()),
-            "MPFI": pa.Column(pa.String, nullable=True, checks=_flag01_unknown()),
-            "PDI": pa.Column(pa.String, nullable=True, checks=_flag01_unknown()),
-            "OHV": pa.Column(pa.String, nullable=True, checks=_flag01_unknown()),
-            "SOHC": pa.Column(pa.String, nullable=True, checks=_flag01_unknown()),
+            "GDI": pa.Column(pa.String, nullable=True, checks=_flag01_unknown_or_selfname("GDI")),
+            "DOHC": pa.Column(pa.String, nullable=True, checks=_flag01_unknown_or_selfname("DOHC")),
+            "Turbo": pa.Column(
+                pa.String, nullable=True, checks=_flag01_unknown_or_selfname("Turbo")
+            ),
+            "MPFI": pa.Column(pa.String, nullable=True, checks=_flag01_unknown_or_selfname("MPFI")),
+            "PDI": pa.Column(pa.String, nullable=True, checks=_flag01_unknown_or_selfname("PDI")),
+            "OHV": pa.Column(pa.String, nullable=True, checks=_flag01_unknown_or_selfname("OHV")),
+            "SOHC": pa.Column(pa.String, nullable=True, checks=_flag01_unknown_or_selfname("SOHC")),
         },
         strict=True,
         coerce=True,
