@@ -10,7 +10,7 @@ import typer
 from pydantic import ValidationError
 
 from ucpp.core.logging import info, warn
-from ucpp.predict.predict import PredictResult, predict_one
+from ucpp.predict.predict import DEFAULT_MODEL_BY_MARKET, PredictResult, predict_one
 from ucpp.predict.schema import validate_payload
 
 app = typer.Typer(add_completion=False)
@@ -82,9 +82,13 @@ def run(
     for idx, raw in enumerate(rows):
         try:
             clean = validate_payload(market_u, raw)
+            chosen = model or DEFAULT_MODEL_BY_MARKET.get(market_u)
+            if chosen is None:
+                raise typer.BadParameter("market must be IN or US")
+
             res: PredictResult = predict_one(
                 market=market_u,
-                model=model or ("lightgbm_log"),
+                model=chosen,
                 payload=clean,
                 artifacts_dir=artifacts_dir,
             )
@@ -122,3 +126,7 @@ def run(
         err_path = out_dir / "errors.jsonl"
         _write_jsonl(err_path, errors)
         info(f"Wrote errors: {err_path}")
+
+
+if __name__ == "__main__":
+    app()
