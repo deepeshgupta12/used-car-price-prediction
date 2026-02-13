@@ -12,7 +12,7 @@ from ucpp.validate.basic_checks import check_columns_present, check_non_empty, s
 app = typer.Typer(help="UCPP CLI")
 
 
-@app.command()
+@app.command("verify-data")
 def verify_data(
     cars_csv: Path = RAW_DIR / "Cars.csv",
     used_cars_csv: Path = RAW_DIR / "used_cars.csv",
@@ -38,7 +38,7 @@ def verify_data(
     results.append(check_non_empty(df_us, "used_us"))
     results.append(check_non_empty(df_tpl, "template"))
 
-    # Minimal expected columns (we’ll tighten in later steps after inspection)
+    # Minimal expected columns (we’ll tighten after we inspect column names in V0)
     results.append(check_columns_present(df_in, "cars_in", ["Year", "Price"]))
     results.append(check_columns_present(df_us, "used_us", ["model_year", "price"]))
 
@@ -49,5 +49,9 @@ def verify_data(
             warn(f"{r.name} FAIL ({r.details})")
 
 
-if __name__ == "__main__":
+def main() -> None:
     app()
+
+
+if __name__ == "__main__":
+    main()
