@@ -22,8 +22,10 @@ class _BasePayload(BaseModel):
 
 class InPayload(_BasePayload):
     """
-    Matches raw fields expected by transform_in() in src/ucpp/features/preprocess.py.
-    We also allow optional Price for convenience (transform_in drops it anyway).
+    Matches raw fields expected by transform_in().
+
+    We keep the original raw field names so JSON/CSV rows can be used as-is.
+    Note: "No. of Doors" is represented via alias.
     """
 
     Name: str | None = Field(default=None)
@@ -45,19 +47,23 @@ class InPayload(_BasePayload):
     Price: float | None = Field(default=None)
 
     def cleaned_dict(self) -> dict[str, Any]:
+        # Use aliases so downstream sees "No. of Doors"
         d = self.model_dump(by_alias=True)
-        # normalize string-like fields
+
         for k in ["Name", "Location", "Fuel_Type", "Transmission", "Owner_Type", "Colour"]:
             d[k] = _strip_or_none(d.get(k))
+
         for k in ["Mileage", "Engine", "Power", "New_Price"]:
             d[k] = _strip_or_none(d.get(k))
+
+        # "No. of Doors" stays numeric; no string normalization needed.
         return d
 
 
 class UsPayload(_BasePayload):
     """
-    Matches raw fields expected by transform_us() in src/ucpp/features/preprocess.py.
-    We also allow optional price for convenience (transform_us drops it anyway).
+    Matches raw fields expected by transform_us().
+    All string-ish fields are optional to support real-world CSV missingness.
     """
 
     brand: str | None = Field(default=None)
@@ -76,6 +82,7 @@ class UsPayload(_BasePayload):
 
     def cleaned_dict(self) -> dict[str, Any]:
         d = self.model_dump()
+
         for k in [
             "brand",
             "model",
@@ -89,6 +96,8 @@ class UsPayload(_BasePayload):
             "milage",
         ]:
             d[k] = _strip_or_none(d.get(k))
+
+        # price can be str/float/None; leave it (transform_us drops it anyway)
         return d
 
 

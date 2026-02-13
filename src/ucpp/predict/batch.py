@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
@@ -12,8 +13,6 @@ from pydantic import ValidationError
 from ucpp.core.logging import info, warn
 from ucpp.predict.predict import DEFAULT_MODEL_BY_MARKET, PredictResult, predict_one
 from ucpp.predict.schema import validate_payload
-
-app = typer.Typer(add_completion=False)
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -48,8 +47,28 @@ def _write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
 
-@app.command()
-def run(
+def _is_nan(x: Any) -> bool:
+    return isinstance(x, float) and math.isnan(x)
+
+
+def _normalize_nan(obj: Any) -> Any:
+    """
+    Pandas uses float('nan') for missing cells in CSV/XLSX.
+    Pydantic treats NaN as a float, not a missing value, so validation fails
+    for fields like `str | None`.
+
+    Normalize NaN -> None recursively before schema validation.
+    """
+    if isinstance(obj, dict):
+        return {k: _normalize_nan(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_normalize_nan(v) for v in obj]
+    if _is_nan(obj):
+        return None
+    return obj
+
+
+def main(
     market: str = typer.Option(..., help="IN or US"),
     input_path: Path = typer.Option(  # noqa: B008
         ..., exists=True, dir_okay=False, help="Input .jsonl/.csv/.xlsx"
@@ -65,6 +84,7 @@ def run(
     """
     Batch inference:
       - Reads input (.jsonl/.csv/.xlsx)
+      - Normalizes NaN -> None (CSV/XLSX)
       - Validates schema per row
       - Runs prediction
       - Writes:
@@ -79,12 +99,14 @@ def run(
     preds: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
 
+    chosen = model or DEFAULT_MODEL_BY_MARKET.get(market_u)
+    if chosen is None:
+        raise typer.BadParameter("market must be IN or US")
+
     for idx, raw in enumerate(rows):
         try:
-            clean = validate_payload(market_u, raw)
-            chosen = model or DEFAULT_MODEL_BY_MARKET.get(market_u)
-            if chosen is None:
-                raise typer.BadParameter("market must be IN or US")
+            raw2 = _normalize_nan(raw)
+            clean = validate_payload(market_u, raw2)
 
             res: PredictResult = predict_one(
                 market=market_u,
@@ -129,4 +151,4 @@ def run(
 
 
 if __name__ == "__main__":
-    app()
+    typer.run(main)
