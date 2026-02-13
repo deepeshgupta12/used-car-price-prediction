@@ -25,6 +25,12 @@ artifacts/*
 # MLflow (later)
 mlruns/
 
+# Generated runtime artifacts
+outputs/
+artifacts/
+__pycache__/
+*.pyc
+
 # OS / Editor
 .DS_Store
 .vscode/

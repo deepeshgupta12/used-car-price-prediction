@@ -48,10 +48,23 @@ def transform_in(df: pd.DataFrame) -> pd.DataFrame:
     if "Price" in work.columns:
         work = work.drop(columns=["Price"])
 
+    # Ensure expected raw columns exist (so batch with partial/empty payloads doesn't explode)
+    for c in ["Mileage", "Engine", "Power", "New_Price"]:
+        if c not in work.columns:
+            work[c] = None
+
     work["Mileage_num"] = work["Mileage"].apply(parse_in_mileage_kmpl)
     work["Engine_cc"] = work["Engine"].apply(parse_in_engine_cc)
     work["Power_bhp"] = work["Power"].apply(parse_in_power_bhp)
     work["NewPrice_lakh"] = work["New_Price"].apply(parse_in_new_price_lakh)
+
+    # Coerce parsed numeric features to float (avoids object dtype when values are None)
+    for c in ["Mileage_num", "Engine_cc", "Power_bhp", "NewPrice_lakh"]:
+        work[c] = pd.to_numeric(work[c], errors="coerce")
+
+    for c in ["Year", "Kilometers_Driven", "Seats", "No. of Doors"]:
+        if c not in work.columns:
+            work[c] = None
 
     work["Year"] = pd.to_numeric(work["Year"], errors="coerce")
     work["Kilometers_Driven"] = pd.to_numeric(work["Kilometers_Driven"], errors="coerce")
@@ -85,8 +98,15 @@ def transform_us(df: pd.DataFrame) -> pd.DataFrame:
     if "price" in work.columns:
         work = work.drop(columns=["price"])
 
+    if "milage" not in work.columns:
+        work["milage"] = None
+
     work["milage_miles"] = work["milage"].apply(parse_us_milage_to_int)
+    work["milage_miles"] = pd.to_numeric(work["milage_miles"], errors="coerce")
     work = work.drop(columns=["milage"])
+
+    if "model_year" not in work.columns:
+        work["model_year"] = None
 
     work["model_year"] = pd.to_numeric(work["model_year"], errors="coerce")
 
