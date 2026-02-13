@@ -8,6 +8,7 @@ from typer import Context
 from ucpp import __version__
 from ucpp.core.constants import RAW_DIR
 from ucpp.core.logging import info, warn
+from ucpp.features.preprocess import preprocess_in, preprocess_us, train_valid_split
 from ucpp.ingest.loaders import load_cars_csv, load_test_final_xlsx, load_used_cars_csv
 from ucpp.validate.basic_checks import check_columns_present, check_non_empty, summarize
 from ucpp.validate.validate import validate_df
@@ -21,9 +22,6 @@ def verify_data(
     used_cars_csv: Path = RAW_DIR / "used_cars.csv",
     test_final_xlsx: Path = RAW_DIR / "test_final.xlsx",
 ) -> None:
-    """
-    Loads datasets and runs basic sanity checks.
-    """
     info(f"Reading: {cars_csv}")
     df_in = load_cars_csv(cars_csv)
     info(f"IN dataset summary: {summarize(df_in)}")
@@ -41,7 +39,6 @@ def verify_data(
     results.append(check_non_empty(df_us, "used_us"))
     results.append(check_non_empty(df_tpl, "template"))
 
-    # Minimal expected columns (we’ll tighten after we inspect column names in V0)
     results.append(check_columns_present(df_in, "cars_in", ["Year", "Price"]))
     results.append(check_columns_present(df_us, "used_us", ["model_year", "price"]))
 
@@ -58,9 +55,6 @@ def validate_data(
     used_cars_csv: Path = RAW_DIR / "used_cars.csv",
     test_final_xlsx: Path = RAW_DIR / "test_final.xlsx",
 ) -> None:
-    """
-    Validates datasets against strict schema contracts (Pandera).
-    """
     info(f"Validating IN: {cars_csv}")
     df_in = load_cars_csv(cars_csv)
     _, out_in = validate_df(df_in, "IN")
@@ -82,9 +76,42 @@ def validate_data(
     info("All schema validations passed.")
 
 
+@app.command("prep-report")
+def prep_report(
+    market: str = typer.Option(..., help="IN or US"),
+    cars_csv: Path = RAW_DIR / "Cars.csv",
+    used_cars_csv: Path = RAW_DIR / "used_cars.csv",
+) -> None:
+    """
+    Runs preprocessing and prints a compact report: feature columns, null rates, y stats.
+    """
+    market_u = market.strip().upper()
+    if market_u == "IN":
+        df = load_cars_csv(cars_csv)
+        x, y = preprocess_in(df)
+    elif market_u == "US":
+        df = load_used_cars_csv(used_cars_csv)
+        x, y = preprocess_us(df)
+    else:
+        raise typer.BadParameter("market must be IN or US")
+
+    split = train_valid_split(x, y)
+
+    info(f"{market_u} x shape: {x.shape}, y non-null: {y.notna().sum()} / {len(y)}")
+    info(f"{market_u} Train shape: {split.x_train.shape}, Valid shape: {split.x_valid.shape}")
+
+    null_rate = (x.isna().mean().sort_values(ascending=False).head(15) * 100.0).round(2)
+    info(f"{market_u} Top null-rate features (%): {null_rate.to_dict()}")
+
+    y_nonnull = y.dropna()
+    info(
+        f"{market_u} y stats: count={len(y_nonnull)}, min={y_nonnull.min():.3f}, "
+        f"p50={y_nonnull.median():.3f}, p90={y_nonnull.quantile(0.9):.3f}, max={y_nonnull.max():.3f}"
+    )
+
+
 @app.command("version")
 def version() -> None:
-    """Print package version."""
     info(f"ucpp version: {__version__}")
 
 
@@ -95,10 +122,6 @@ def default(
     used_cars_csv: Path = RAW_DIR / "used_cars.csv",
     test_final_xlsx: Path = RAW_DIR / "test_final.xlsx",
 ) -> None:
-    """
-    Default behavior: if no subcommand is provided, run `verify-data`.
-    Also supports passing dataset paths directly without specifying the command.
-    """
     if ctx.invoked_subcommand is None:
         verify_data(cars_csv=cars_csv, used_cars_csv=used_cars_csv, test_final_xlsx=test_final_xlsx)
 
