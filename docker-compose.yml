@@ -1,0 +1,15 @@
+version: "3.9"
+
+services:
+  ucpp-api:
+    build: .
+    container_name: ucpp-api
+    ports:
+      - "8000:8000"
+    environment:
+      - UCPP_ARTIFACTS_DIR=/app/artifacts
+      - UCPP_HOST=0.0.0.0
+      - UCPP_PORT=8000
+    volumes:
+      # Mount your locally-trained artifacts into the container
+      - ./artifacts:/app/artifacts:ro
