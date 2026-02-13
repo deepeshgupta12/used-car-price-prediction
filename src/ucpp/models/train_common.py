@@ -8,47 +8,109 @@ import numpy as np
 import pandas as pd
 from catboost import CatBoostRegressor
 from lightgbm import LGBMRegressor
-from pandas.api.types import is_categorical_dtype, is_object_dtype, is_string_dtype
 
-from ucpp.models.metrics import mae, rmse, smape
+from ucpp.models.metrics import compute_regression_metrics
 
 
 @dataclass(frozen=True)
 class TrainResult:
-    model_name: str
-    metrics: dict[str, float]
+    mae: float
+    rmse: float
+    smape: float
 
 
-_CAT_MISSING = "__MISSING__"
+def save_joblib(obj: Any, path: str) -> None:
+    joblib.dump(obj, path)
 
 
-def _cat_features_indices(df: pd.DataFrame) -> list[int]:
+def _as_numpy(a: Any) -> np.ndarray:
+    if isinstance(a, pd.Series | pd.DataFrame):
+        return a.to_numpy()
+    return np.asarray(a)
+
+
+def _is_categorical_series(s: pd.Series) -> bool:
+    # Handles pandas 'object' and pandas 'string/str' dtype
+    return pd.api.types.is_object_dtype(s) or pd.api.types.is_string_dtype(s)
+
+
+def _sanitize_catboost_categoricals(
+    df: pd.DataFrame, *, cat_cols: list[str] | None = None
+) -> tuple[pd.DataFrame, list[int]]:
     """
-    CatBoost categorical/text columns can be:
-    - object
-    - pandas string dtype
-    - category
+    CatBoost requires categorical values to be string or int.
+    Missing values in categorical columns must be converted to a placeholder string.
+
+    We treat both:
+      - object dtype
+      - pandas string dtype (printed as 'str' / 'string[python]')
     """
-    idx: list[int] = []
-    for i, col in enumerate(df.columns):
-        s = df[col]
-        if is_object_dtype(s) or is_string_dtype(s) or is_categorical_dtype(s):
-            idx.append(i)
-    return idx
+    x = df.copy()
+
+    if cat_cols is None:
+        cat_cols = [c for c in x.columns if _is_categorical_series(x[c])]
+
+    cat_idx: list[int] = [x.columns.get_loc(c) for c in cat_cols]
+
+    for c in cat_cols:
+        s = x[c]
+        s2 = s.astype(object).where(s.notna(), other="__MISSING__").astype(str)
+        x[c] = s2
+
+    return x, cat_idx
 
 
-def _sanitize_for_catboost(df: pd.DataFrame, cat_idx: list[int]) -> pd.DataFrame:
+@dataclass(frozen=True)
+class EncodedFrame:
+    x_num: pd.DataFrame
+    cat_cols: list[str]
+
+
+def encode_for_lgbm(x: pd.DataFrame) -> EncodedFrame:
     """
-    CatBoost does NOT allow NaN in categorical features.
-    Convert categorical columns to string and fill NaN with sentinel.
-    Leave numeric columns untouched.
+    LightGBM sklearn wrapper can't handle raw string columns.
+    We encode categoricals into integer codes (stable within a run).
+
+    - Identify categorical columns (object or string dtype)
+    - Fill missing with '__MISSING__'
+    - Convert to pandas Categorical
+    - Use .cat.codes
     """
-    out = df.copy()
-    for i in cat_idx:
-        col = out.columns[i]
-        # Ensure missing are filled, then cast to string
-        out[col] = out[col].fillna(_CAT_MISSING).astype(str)
-    return out
+    out = x.copy()
+    cat_cols = [c for c in out.columns if _is_categorical_series(out[c])]
+
+    for c in cat_cols:
+        s = out[c].astype(object).where(out[c].notna(), other="__MISSING__").astype(str)
+        out[c] = pd.Categorical(s).codes.astype("int32")
+
+    return EncodedFrame(x_num=out, cat_cols=cat_cols)
+
+
+def encode_for_lgbm_with_cols(x: pd.DataFrame, cat_cols: list[str]) -> EncodedFrame:
+    """
+    Encode only the provided categorical columns list.
+    This ensures train/valid/inference encode the same set of columns.
+    """
+    out = x.copy()
+    for c in cat_cols:
+        if c not in out.columns:
+            # If a column is missing entirely, create it as missing placeholder
+            out[c] = "__MISSING__"
+        s = out[c].astype(object).where(out[c].notna(), other="__MISSING__").astype(str)
+        out[c] = pd.Categorical(s).codes.astype("int32")
+    return EncodedFrame(x_num=out, cat_cols=cat_cols)
+
+
+def _maybe_log1p(y: np.ndarray, use_log_target: bool) -> np.ndarray:
+    if not use_log_target:
+        return y
+    return np.log1p(y)
+
+
+def _maybe_expm1(y: np.ndarray, use_log_target: bool) -> np.ndarray:
+    if not use_log_target:
+        return y
+    return np.expm1(y)
 
 
 def train_catboost(
@@ -56,57 +118,49 @@ def train_catboost(
     y_train: pd.Series,
     x_valid: pd.DataFrame,
     y_valid: pd.Series,
-    seed: int = 42,
-    use_log_target: bool = False,
+    *,
+    use_log_target: bool,
 ) -> tuple[CatBoostRegressor, TrainResult]:
-    cat_idx = _cat_features_indices(x_train)
+    # Determine categorical columns from train, reuse for valid
+    train_cat_cols = [c for c in x_train.columns if _is_categorical_series(x_train[c])]
+    x_tr, cat_idx = _sanitize_catboost_categoricals(x_train, cat_cols=train_cat_cols)
+    x_va, _ = _sanitize_catboost_categoricals(x_valid, cat_cols=train_cat_cols)
 
-    xtr = _sanitize_for_catboost(x_train, cat_idx)
-    xva = _sanitize_for_catboost(x_valid, cat_idx)
+    y_tr = _as_numpy(y_train).astype(float)
+    y_va = _as_numpy(y_valid).astype(float)
 
-    y_tr = y_train.to_numpy()
-    y_va = y_valid.to_numpy()
-
-    if use_log_target:
-        y_tr = np.log1p(y_tr)
-        y_va = np.log1p(y_va)
+    y_tr_t = _maybe_log1p(y_tr, use_log_target)
+    y_va_t = _maybe_log1p(y_va, use_log_target)
 
     model = CatBoostRegressor(
         iterations=2000,
-        learning_rate=0.05,
         depth=8,
-        loss_function="RMSE",
-        random_seed=seed,
-        eval_metric="RMSE",
+        learning_rate=0.05,
+        loss_function="MAE",
+        random_seed=42,
         verbose=False,
         allow_writing_files=False,
     )
 
     model.fit(
-        xtr,
-        y_tr,
+        x_tr,
+        y_tr_t,
+        eval_set=(x_va, y_va_t),
         cat_features=cat_idx,
-        eval_set=(xva, y_va),
         use_best_model=True,
     )
 
-    pred = model.predict(xva)
+    pred_t = _as_numpy(model.predict(x_va)).astype(float)
+    pred = _maybe_expm1(pred_t, use_log_target)
 
-    if use_log_target:
-        pred = np.expm1(pred)
-        y_eval = y_valid.to_numpy()
-    else:
-        y_eval = y_valid.to_numpy()
+    res = compute_regression_metrics(y_va, pred)
+    return model, TrainResult(mae=res["mae"], rmse=res["rmse"], smape=res["smape"])
 
-    res = TrainResult(
-        model_name="catboost_log" if use_log_target else "catboost",
-        metrics={
-            "mae": mae(y_eval, pred),
-            "rmse": rmse(y_eval, pred),
-            "smape": smape(y_eval, pred),
-        },
-    )
-    return model, res
+
+@dataclass(frozen=True)
+class LgbmBundle:
+    model: LGBMRegressor
+    cat_cols: list[str]
 
 
 def train_lightgbm(
@@ -114,70 +168,39 @@ def train_lightgbm(
     y_train: pd.Series,
     x_valid: pd.DataFrame,
     y_valid: pd.Series,
-    seed: int = 42,
-    use_log_target: bool = False,
-) -> tuple[LGBMRegressor, TrainResult]:
-    def _encode_object_cols(
-        train_df: pd.DataFrame, valid_df: pd.DataFrame
-    ) -> tuple[pd.DataFrame, pd.DataFrame]:
-        tr = train_df.copy()
-        va = valid_df.copy()
-        for col in tr.columns:
-            if (
-                is_object_dtype(tr[col])
-                or is_string_dtype(tr[col])
-                or is_categorical_dtype(tr[col])
-            ):
-                combined = pd.concat([tr[col], va[col]], axis=0).astype("category")
-                tr[col] = combined.iloc[: len(tr)].cat.codes
-                va[col] = combined.iloc[len(tr) :].cat.codes
-        return tr, va
+    *,
+    use_log_target: bool,
+) -> tuple[LgbmBundle, TrainResult]:
+    enc_tr = encode_for_lgbm(x_train)
+    enc_va = encode_for_lgbm_with_cols(x_valid, enc_tr.cat_cols)
 
-    xtr, xva = _encode_object_cols(x_train, x_valid)
+    y_tr = _as_numpy(y_train).astype(float)
+    y_va = _as_numpy(y_valid).astype(float)
 
-    y_tr = y_train.to_numpy()
-    y_va = y_valid.to_numpy()
-
-    if use_log_target:
-        y_tr = np.log1p(y_tr)
-        y_va = np.log1p(y_va)
+    y_tr_t = _maybe_log1p(y_tr, use_log_target)
+    y_va_t = _maybe_log1p(y_va, use_log_target)
 
     model = LGBMRegressor(
         n_estimators=3000,
         learning_rate=0.03,
-        num_leaves=64,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        random_state=seed,
+        num_leaves=63,
+        subsample=0.9,
+        colsample_bytree=0.9,
+        random_state=42,
         n_jobs=-1,
     )
 
     model.fit(
-        xtr,
-        y_tr,
-        eval_set=[(xva, y_va)],
-        eval_metric="rmse",
-        callbacks=[],
+        enc_tr.x_num,
+        y_tr_t,
+        eval_set=[(enc_va.x_num, y_va_t)],
+        eval_metric="l1",
     )
 
-    pred = model.predict(xva)
+    pred_t = _as_numpy(model.predict(enc_va.x_num)).astype(float)
+    pred = _maybe_expm1(pred_t, use_log_target)
 
-    if use_log_target:
-        pred = np.expm1(pred)
-        y_eval = y_valid.to_numpy()
-    else:
-        y_eval = y_valid.to_numpy()
-
-    res = TrainResult(
-        model_name="lightgbm_log" if use_log_target else "lightgbm",
-        metrics={
-            "mae": mae(y_eval, pred),
-            "rmse": rmse(y_eval, pred),
-            "smape": smape(y_eval, pred),
-        },
+    res = compute_regression_metrics(y_va, pred)
+    return LgbmBundle(model=model, cat_cols=enc_tr.cat_cols), TrainResult(
+        mae=res["mae"], rmse=res["rmse"], smape=res["smape"]
     )
-    return model, res
-
-
-def save_joblib(obj: Any, path: str) -> None:
-    joblib.dump(obj, path)

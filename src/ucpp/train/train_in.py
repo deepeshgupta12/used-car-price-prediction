@@ -12,6 +12,10 @@ from ucpp.ingest.loaders import load_cars_csv
 from ucpp.models.train_common import save_joblib, train_catboost, train_lightgbm
 
 
+def _metrics_dict(mae: float, rmse: float, smape: float) -> dict[str, float]:
+    return {"mae": float(mae), "rmse": float(rmse), "smape": float(smape)}
+
+
 def main(
     cars_csv: Path = RAW_DIR / "Cars.csv",
     out_dir: Path = Path("artifacts/v1/in"),
@@ -52,12 +56,12 @@ def main(
     save_joblib(lgb_log, str(out_dir / "lightgbm_log.joblib"))
 
     metrics = {
-        cb_raw_res.model_name: cb_raw_res.metrics,
-        cb_log_res.model_name: cb_log_res.metrics,
-        lgb_raw_res.model_name: lgb_raw_res.metrics,
-        lgb_log_res.model_name: lgb_log_res.metrics,
+        "catboost": _metrics_dict(cb_raw_res.mae, cb_raw_res.rmse, cb_raw_res.smape),
+        "catboost_log": _metrics_dict(cb_log_res.mae, cb_log_res.rmse, cb_log_res.smape),
+        "lightgbm": _metrics_dict(lgb_raw_res.mae, lgb_raw_res.rmse, lgb_raw_res.smape),
+        "lightgbm_log": _metrics_dict(lgb_log_res.mae, lgb_log_res.rmse, lgb_log_res.smape),
     }
-    (out_dir / "metrics.json").write_text(json.dumps(metrics, indent=2))
+    (out_dir / "metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
 
     info(f"Saved IN artifacts to: {out_dir}")
     info(f"IN metrics: {metrics}")

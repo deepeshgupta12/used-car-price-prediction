@@ -1,0 +1,13 @@
+{
+  "brand": "Ford",
+  "model": "F-150",
+  "model_year": 2019,
+  "milage": "42000 mi",
+  "fuel_type": "Gasoline",
+  "engine": "3.5L V6",
+  "transmission": "Automatic",
+  "ext_col": "Black",
+  "int_col": "Black",
+  "accident": "None reported",
+  "clean_title": "Yes"
+}

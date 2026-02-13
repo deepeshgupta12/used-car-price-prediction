@@ -26,15 +26,27 @@ class DatasetSplit:
     y_valid: pd.Series
 
 
-def preprocess_in(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
+def _clean_object_cols(df: pd.DataFrame) -> pd.DataFrame:
     """
-    India: target = Price (float)
-    Baseline numeric + categorical features.
+    Ensure object columns are consistently string-like with missing values as None.
+    This matches the behavior used during training.
+    """
+    out = df.copy()
+    for col in out.columns:
+        if out[col].dtype == "object":
+            out[col] = out[col].astype(str).replace({"nan": None, "None": None, "": None})
+    return out
+
+
+def transform_in(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Build IN feature matrix X from raw input rows.
+    Does NOT require 'Price' column.
     """
     work = df.copy()
 
-    y = work["Price"].astype(float)
-    work = work.drop(columns=["Price"])
+    if "Price" in work.columns:
+        work = work.drop(columns=["Price"])
 
     work["Mileage_num"] = work["Mileage"].apply(parse_in_mileage_kmpl)
     work["Engine_cc"] = work["Engine"].apply(parse_in_engine_cc)
@@ -48,11 +60,38 @@ def preprocess_in(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
 
     work = work.drop(columns=["Mileage", "Engine", "Power", "New_Price"])
 
-    for col in work.columns:
-        if work[col].dtype == "object":
-            work[col] = work[col].astype(str).replace({"nan": None, "None": None, "": None})
+    work = _clean_object_cols(work)
+    return work
 
-    return work, y
+
+def preprocess_in(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
+    """
+    India: target = Price (float)
+    Baseline numeric + categorical features.
+    """
+    work = df.copy()
+    y = work["Price"].astype(float)
+    x = transform_in(work)
+    return x, y
+
+
+def transform_us(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Build US feature matrix X from raw input rows.
+    Does NOT require 'price' column.
+    """
+    work = df.copy()
+
+    if "price" in work.columns:
+        work = work.drop(columns=["price"])
+
+    work["milage_miles"] = work["milage"].apply(parse_us_milage_to_int)
+    work = work.drop(columns=["milage"])
+
+    work["model_year"] = pd.to_numeric(work["model_year"], errors="coerce")
+
+    work = _clean_object_cols(work)
+    return work
 
 
 def preprocess_us(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
@@ -60,20 +99,9 @@ def preprocess_us(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
     US: target = price (string -> float USD)
     """
     work = df.copy()
-
-    y = work["price"].apply(parse_us_price_to_float)
-    work = work.drop(columns=["price"])
-
-    work["milage_miles"] = work["milage"].apply(parse_us_milage_to_int)
-    work = work.drop(columns=["milage"])
-
-    work["model_year"] = pd.to_numeric(work["model_year"], errors="coerce")
-
-    for col in work.columns:
-        if work[col].dtype == "object":
-            work[col] = work[col].astype(str).replace({"nan": None, "None": None, "": None})
-
-    return work, y.astype(float)
+    y = work["price"].apply(parse_us_price_to_float).astype(float)
+    x = transform_us(work)
+    return x, y
 
 
 def train_valid_split(

@@ -1,0 +1,16 @@
+{
+  "Name": "Honda City",
+  "Location": "Mumbai",
+  "Year": 2016,
+  "Kilometers_Driven": 45000,
+  "Fuel_Type": "Petrol",
+  "Transmission": "Manual",
+  "Owner_Type": "First",
+  "Mileage": "17.4 kmpl",
+  "Engine": "1497 CC",
+  "Power": "117 bhp",
+  "Colour": "White",
+  "Seats": 5,
+  "No. of Doors": 4,
+  "New_Price": "12.5 Lakh"
+}
