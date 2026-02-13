@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# Environments
+.venv/
+.env
+
+# Data
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# Artifacts
+artifacts/*
+!artifacts/models/.gitkeep
+!artifacts/reports/.gitkeep
+
+# MLflow (later)
+mlruns/
+
+# OS / Editor
+.DS_Store
+.vscode/
