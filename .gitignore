@@ -28,3 +28,5 @@ mlruns/
 # OS / Editor
 .DS_Store
 .vscode/
+# model binaries
+artifacts/**/*.joblib
