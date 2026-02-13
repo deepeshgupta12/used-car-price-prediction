@@ -68,6 +68,19 @@ def schema_us() -> pa.DataFrameSchema:
     )
 
 
+def _flag01_unknown() -> Check:
+    """
+    TEMPLATE flags sometimes contain 'unknown' strings.
+    Allow: 0/1 as ints, '0'/'1' as strings, 'unknown', or missing.
+    We validate by converting to string and checking membership.
+    """
+    allowed = {"0", "1", "unknown"}
+    return Check(
+        lambda s: s.isna() | s.astype(str).str.strip().str.lower().isin(allowed),
+        name="flag_in_{0,1,unknown}",
+    )
+
+
 def schema_template() -> pa.DataFrameSchema:
     """
     TEMPLATE dataset (test_final.xlsx) schema contract.
@@ -76,6 +89,9 @@ def schema_template() -> pa.DataFrameSchema:
     ['id','brand','model','model_year','milage','fuel_type','transmission','ext_col','int_col',
      'accident','clean_title','power','dispersion','battery','engine',
      'GDI','DOHC','Turbo','MPFI','PDI','OHV','SOHC']
+
+    Note: Some flag columns (e.g., GDI) contain string value 'unknown'.
+    We keep them as strings for validation and will normalize to 0/1 later in V1.
     """
     return pa.DataFrameSchema(
         {
@@ -94,13 +110,13 @@ def schema_template() -> pa.DataFrameSchema:
             "dispersion": pa.Column(pa.Float, nullable=True, checks=Check.ge(0)),
             "battery": pa.Column(pa.Float, nullable=True, checks=Check.ge(0)),
             "engine": pa.Column(pa.String, nullable=True),
-            "GDI": pa.Column(pa.Int, nullable=False, checks=Check.isin([0, 1])),
-            "DOHC": pa.Column(pa.Int, nullable=False, checks=Check.isin([0, 1])),
-            "Turbo": pa.Column(pa.Int, nullable=False, checks=Check.isin([0, 1])),
-            "MPFI": pa.Column(pa.Int, nullable=False, checks=Check.isin([0, 1])),
-            "PDI": pa.Column(pa.Int, nullable=False, checks=Check.isin([0, 1])),
-            "OHV": pa.Column(pa.Int, nullable=False, checks=Check.isin([0, 1])),
-            "SOHC": pa.Column(pa.Int, nullable=False, checks=Check.isin([0, 1])),
+            "GDI": pa.Column(pa.String, nullable=True, checks=_flag01_unknown()),
+            "DOHC": pa.Column(pa.String, nullable=True, checks=_flag01_unknown()),
+            "Turbo": pa.Column(pa.String, nullable=True, checks=_flag01_unknown()),
+            "MPFI": pa.Column(pa.String, nullable=True, checks=_flag01_unknown()),
+            "PDI": pa.Column(pa.String, nullable=True, checks=_flag01_unknown()),
+            "OHV": pa.Column(pa.String, nullable=True, checks=_flag01_unknown()),
+            "SOHC": pa.Column(pa.String, nullable=True, checks=_flag01_unknown()),
         },
         strict=True,
         coerce=True,
