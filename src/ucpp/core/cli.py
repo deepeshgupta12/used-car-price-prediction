@@ -10,6 +10,7 @@ from ucpp.core.constants import RAW_DIR
 from ucpp.core.logging import info, warn
 from ucpp.ingest.loaders import load_cars_csv, load_test_final_xlsx, load_used_cars_csv
 from ucpp.validate.basic_checks import check_columns_present, check_non_empty, summarize
+from ucpp.validate.validate import validate_df
 
 app = typer.Typer(help="UCPP CLI", no_args_is_help=False)
 
@@ -49,6 +50,36 @@ def verify_data(
             info(f"{r.name} OK ({r.details})")
         else:
             warn(f"{r.name} FAIL ({r.details})")
+
+
+@app.command("validate-data")
+def validate_data(
+    cars_csv: Path = RAW_DIR / "Cars.csv",
+    used_cars_csv: Path = RAW_DIR / "used_cars.csv",
+    test_final_xlsx: Path = RAW_DIR / "test_final.xlsx",
+) -> None:
+    """
+    Validates datasets against strict schema contracts (Pandera).
+    """
+    info(f"Validating IN: {cars_csv}")
+    df_in = load_cars_csv(cars_csv)
+    _, out_in = validate_df(df_in, "IN")
+    if not out_in.ok:
+        raise typer.Exit(code=1)
+
+    info(f"Validating US: {used_cars_csv}")
+    df_us = load_used_cars_csv(used_cars_csv)
+    _, out_us = validate_df(df_us, "US")
+    if not out_us.ok:
+        raise typer.Exit(code=1)
+
+    info(f"Validating TEMPLATE: {test_final_xlsx}")
+    df_tpl = load_test_final_xlsx(test_final_xlsx)
+    _, out_tpl = validate_df(df_tpl, "TEMPLATE")
+    if not out_tpl.ok:
+        raise typer.Exit(code=1)
+
+    info("All schema validations passed.")
 
 
 @app.command("version")
