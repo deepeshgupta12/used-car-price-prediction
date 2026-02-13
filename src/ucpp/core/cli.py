@@ -3,13 +3,15 @@ from __future__ import annotations
 from pathlib import Path
 
 import typer
+from typer import Context
 
+from ucpp import __version__
 from ucpp.core.constants import RAW_DIR
 from ucpp.core.logging import info, warn
 from ucpp.ingest.loaders import load_cars_csv, load_test_final_xlsx, load_used_cars_csv
 from ucpp.validate.basic_checks import check_columns_present, check_non_empty, summarize
 
-app = typer.Typer(help="UCPP CLI")
+app = typer.Typer(help="UCPP CLI", no_args_is_help=False)
 
 
 @app.command("verify-data")
@@ -47,6 +49,27 @@ def verify_data(
             info(f"{r.name} OK ({r.details})")
         else:
             warn(f"{r.name} FAIL ({r.details})")
+
+
+@app.command("version")
+def version() -> None:
+    """Print package version."""
+    info(f"ucpp version: {__version__}")
+
+
+@app.callback(invoke_without_command=True)
+def default(
+    ctx: Context,
+    cars_csv: Path = RAW_DIR / "Cars.csv",
+    used_cars_csv: Path = RAW_DIR / "used_cars.csv",
+    test_final_xlsx: Path = RAW_DIR / "test_final.xlsx",
+) -> None:
+    """
+    Default behavior: if no subcommand is provided, run `verify-data`.
+    Also supports passing dataset paths directly without specifying the command.
+    """
+    if ctx.invoked_subcommand is None:
+        verify_data(cars_csv=cars_csv, used_cars_csv=used_cars_csv, test_final_xlsx=test_final_xlsx)
 
 
 def main() -> None:
