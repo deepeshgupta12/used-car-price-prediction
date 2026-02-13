@@ -11,8 +11,9 @@ import typer
 
 from ucpp.features.preprocess import transform_in, transform_us
 from ucpp.models.train_common import LgbmBundle, encode_for_lgbm_with_cols
+from ucpp.predict.schema import validate_payload
 
-# Default model choice (based on your v1 metrics summary)
+# Default model choice (based on our v1 metrics summary)
 DEFAULT_MODEL_BY_MARKET: dict[str, str] = {
     "IN": "lightgbm_log",
     "US": "lightgbm_log",
@@ -34,7 +35,6 @@ def _read_input_json(path: Path) -> dict[str, Any]:
 
 
 def _model_path(artifacts_dir: Path, market: str, model: str) -> Path:
-    # artifacts/v1/in/lightgbm_log.joblib
     return artifacts_dir / "v1" / market.lower() / f"{model}.joblib"
 
 
@@ -43,7 +43,6 @@ def _is_log_model(model: str) -> bool:
 
 
 def _invert_target(model: str, yhat: float) -> float:
-    # log models were trained on log1p(target)
     if _is_log_model(model):
         return float(math.expm1(yhat))
     return float(yhat)
@@ -81,9 +80,11 @@ def predict_one(
     if not model_file.exists():
         raise typer.BadParameter(f"model not found: {model_file}")
 
+    clean = validate_payload(market_u, payload)
+
     import pandas as pd  # local import to keep top clean
 
-    df = pd.DataFrame([payload])
+    df = pd.DataFrame([clean])
 
     if market_u == "IN":
         x = transform_in(df)
