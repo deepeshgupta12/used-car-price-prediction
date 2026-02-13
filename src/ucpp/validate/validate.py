@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 import pandas as pd
-import pandera as pa
+from pandera.errors import SchemaErrors
 
 from ucpp.core.logging import info, warn
 from ucpp.validate.schemas import schema_in, schema_template, schema_us
@@ -44,8 +44,7 @@ def validate_df(df: pd.DataFrame, market: Market) -> tuple[pd.DataFrame, Validat
         )
         info(f"{market} schema validation OK (rows={rows_in})")
         return validated, outcome
-    except pa.errors.SchemaErrors as e:
-        # Return original df and a readable error summary
+    except SchemaErrors as e:
         failure_cases = e.failure_cases
         msg = failure_cases.head(50).to_string(index=False)
         outcome = ValidationOutcome(
