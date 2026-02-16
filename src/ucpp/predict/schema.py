@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Market = Literal["IN", "US"]
 
@@ -16,38 +16,6 @@ def _strip_or_none(v: Any) -> str | None:
     return s
 
 
-def _require_any_non_null(
-    *,
-    market: str,
-    cleaned: dict[str, Any],
-    required_any_of: list[str],
-) -> None:
-    """
-    Reject completely empty / unusable rows (e.g. {} or all-null after cleaning).
-
-    Must raise *pydantic.ValidationError* (correctly constructed) so API can map it to 422
-    and batch(non-strict) marks it as validation_error.
-    """
-    if any(cleaned.get(k) is not None for k in required_any_of):
-        return
-
-    msg = f"empty payload: provide at least one of {required_any_of} for market={market}"
-
-    # Pydantic v2 expects ctx["error"] for value_error
-    raise ValidationError.from_exception_data(
-        "Payload",
-        [
-            {
-                "type": "value_error",
-                "loc": ("payload",),
-                "msg": msg,
-                "input": cleaned,
-                "ctx": {"error": msg},
-            }
-        ],
-    )
-
-
 class _BasePayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -56,7 +24,7 @@ class InPayload(_BasePayload):
     """
     Matches raw fields expected by transform_in().
 
-    We keep the original raw field names so JSON/CSV rows can be used as-is.
+    We keep original raw field names so JSON/CSV rows can be used as-is.
     Note: "No. of Doors" is represented via alias.
     """
 
@@ -78,12 +46,28 @@ class InPayload(_BasePayload):
 
     Price: float | None = Field(default=None)
 
+    @model_validator(mode="after")
+    def _reject_all_empty(self) -> InPayload:
+        # Treat completely empty payloads as invalid input.
+        must_have_any = [
+            "Name",
+            "Location",
+            "Year",
+            "Kilometers_Driven",
+            "Fuel_Type",
+            "Transmission",
+        ]
+        if all(getattr(self, k) is None for k in must_have_any):
+            raise ValueError(
+                f"empty payload: provide at least one of {must_have_any} for market=IN"
+            )
+        return self
+
     def cleaned_dict(self) -> dict[str, Any]:
         d = self.model_dump(by_alias=True)
 
         for k in ["Name", "Location", "Fuel_Type", "Transmission", "Owner_Type", "Colour"]:
             d[k] = _strip_or_none(d.get(k))
-
         for k in ["Mileage", "Engine", "Power", "New_Price"]:
             d[k] = _strip_or_none(d.get(k))
 
@@ -110,9 +94,17 @@ class UsPayload(_BasePayload):
 
     price: str | float | None = Field(default=None)
 
+    @model_validator(mode="after")
+    def _reject_all_empty(self) -> UsPayload:
+        must_have_any = ["brand", "model", "model_year", "milage", "fuel_type", "transmission"]
+        if all(getattr(self, k) is None for k in must_have_any):
+            raise ValueError(
+                f"empty payload: provide at least one of {must_have_any} for market=US"
+            )
+        return self
+
     def cleaned_dict(self) -> dict[str, Any]:
         d = self.model_dump()
-
         for k in [
             "brand",
             "model",
@@ -126,40 +118,15 @@ class UsPayload(_BasePayload):
             "milage",
         ]:
             d[k] = _strip_or_none(d.get(k))
-
         return d
 
 
 def validate_payload(market: str, payload: dict[str, Any]) -> dict[str, Any]:
     m = market.upper()
-
     if m == "IN":
         obj = InPayload.model_validate(payload)
-        clean = obj.cleaned_dict()
-
-        _require_any_non_null(
-            market="IN",
-            cleaned=clean,
-            required_any_of=[
-                "Name",
-                "Location",
-                "Year",
-                "Kilometers_Driven",
-                "Fuel_Type",
-                "Transmission",
-            ],
-        )
-        return clean
-
+        return obj.cleaned_dict()
     if m == "US":
         obj = UsPayload.model_validate(payload)
-        clean = obj.cleaned_dict()
-
-        _require_any_non_null(
-            market="US",
-            cleaned=clean,
-            required_any_of=["brand", "model", "model_year", "milage"],
-        )
-        return clean
-
+        return obj.cleaned_dict()
     raise ValueError("market must be IN or US")
