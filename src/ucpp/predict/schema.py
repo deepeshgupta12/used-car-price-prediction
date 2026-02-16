@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Market = Literal["IN", "US"]
 
@@ -24,7 +24,7 @@ class InPayload(_BasePayload):
     """
     Matches raw fields expected by transform_in().
 
-    We keep the original raw field names so JSON/CSV rows can be used as-is.
+    We keep original raw field names so JSON/CSV rows can be used as-is.
     Note: "No. of Doors" is represented via alias.
     """
 
@@ -46,17 +46,31 @@ class InPayload(_BasePayload):
 
     Price: float | None = Field(default=None)
 
+    @model_validator(mode="after")
+    def _reject_all_empty(self) -> InPayload:
+        # Treat completely empty payloads as invalid input.
+        must_have_any = [
+            "Name",
+            "Location",
+            "Year",
+            "Kilometers_Driven",
+            "Fuel_Type",
+            "Transmission",
+        ]
+        if all(getattr(self, k) is None for k in must_have_any):
+            raise ValueError(
+                f"empty payload: provide at least one of {must_have_any} for market=IN"
+            )
+        return self
+
     def cleaned_dict(self) -> dict[str, Any]:
-        # Use aliases so downstream sees "No. of Doors"
         d = self.model_dump(by_alias=True)
 
         for k in ["Name", "Location", "Fuel_Type", "Transmission", "Owner_Type", "Colour"]:
             d[k] = _strip_or_none(d.get(k))
-
         for k in ["Mileage", "Engine", "Power", "New_Price"]:
             d[k] = _strip_or_none(d.get(k))
 
-        # "No. of Doors" stays numeric; no string normalization needed.
         return d
 
 
@@ -80,9 +94,17 @@ class UsPayload(_BasePayload):
 
     price: str | float | None = Field(default=None)
 
+    @model_validator(mode="after")
+    def _reject_all_empty(self) -> UsPayload:
+        must_have_any = ["brand", "model", "model_year", "milage", "fuel_type", "transmission"]
+        if all(getattr(self, k) is None for k in must_have_any):
+            raise ValueError(
+                f"empty payload: provide at least one of {must_have_any} for market=US"
+            )
+        return self
+
     def cleaned_dict(self) -> dict[str, Any]:
         d = self.model_dump()
-
         for k in [
             "brand",
             "model",
@@ -96,8 +118,6 @@ class UsPayload(_BasePayload):
             "milage",
         ]:
             d[k] = _strip_or_none(d.get(k))
-
-        # price can be str/float/None; leave it (transform_us drops it anyway)
         return d
 
 
