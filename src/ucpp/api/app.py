@@ -16,6 +16,7 @@ from ucpp.api.models import (
     PredictRequest,
     PredictResponse,
 )
+from ucpp.api.settings import Settings
 from ucpp.features.preprocess import transform_in, transform_us
 from ucpp.predict.predict import (
     DEFAULT_MODEL_BY_MARKET,
@@ -25,14 +26,57 @@ from ucpp.predict.predict import (
 )
 from ucpp.predict.schema import validate_payload
 
-app = FastAPI(title="Used Car Price Prediction API", version="v3")
+app = FastAPI(title="Used Car Price Prediction API", version="v4")
 
 _model_cache = ModelCache()
 
 
+def _settings() -> Settings:
+    # We keep env handling in a single place to be docker/CI friendly.
+    # Pydantic BaseModel is used here for type-safety; Path parsing is trivial.
+    import os
+
+    raw = os.getenv("UCPP_ARTIFACTS_DIR", "artifacts")
+    return Settings(artifacts_dir=Path(raw))
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
+    # Liveness: process is up.
     return {"status": "ok"}
+
+
+@app.get("/ready")
+def ready() -> dict[str, Any]:
+    """
+    Readiness: artifacts exist and default models are loadable.
+    This makes docker/k8s deployments sane and failures obvious.
+    """
+    s = _settings()
+
+    required = [
+        ("IN", DEFAULT_MODEL_BY_MARKET["IN"]),
+        ("US", DEFAULT_MODEL_BY_MARKET["US"]),
+    ]
+
+    missing: list[str] = []
+    for market, model in required:
+        p = _model_path(s.artifacts_dir, market, model)
+        if not p.exists():
+            missing.append(str(p))
+
+    if missing:
+        raise HTTPException(status_code=503, detail={"missing_models": missing})
+
+    # Attempt load to catch corrupted joblibs early
+    try:
+        for market, model in required:
+            p = _model_path(s.artifacts_dir, market, model)
+            _model_cache.get(p)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail={"artifact_load_error": str(e)}) from e
+
+    return {"status": "ready", "artifacts_dir": str(s.artifacts_dir)}
 
 
 def _choose_model(market_u: str, model: str | None) -> str:
@@ -66,8 +110,6 @@ def _predict(
     try:
         clean = validate_payload(market_u, payload)
     except ValidationError as ve:
-        # FastAPI will usually convert ValidationError to 422 if raised inside request model parsing,
-        # but here validation happens post-parse, so we translate it.
         raise HTTPException(status_code=422, detail=ve.errors()) from ve
 
     x = _feature_matrix(market_u, clean)
@@ -81,11 +123,12 @@ def predict(req: PredictRequest) -> PredictResponse:
     market_u = req.market.upper()
     chosen = _choose_model(market_u, req.model)
 
+    s = _settings()
     pred = _predict(
         market_u=market_u,
         model=chosen,
         payload=req.payload,
-        artifacts_dir=Path("artifacts"),
+        artifacts_dir=s.artifacts_dir,
     )
 
     return PredictResponse(market=req.market, model=chosen, prediction=pred)
@@ -95,6 +138,7 @@ def predict(req: PredictRequest) -> PredictResponse:
 def batch_predict(req: BatchPredictRequest) -> BatchPredictResponse:
     market_u = req.market.upper()
     chosen = _choose_model(market_u, req.model)
+    s = _settings()
 
     preds: list[BatchPredItem] = []
     errors: list[BatchErrorItem] = []
@@ -105,14 +149,12 @@ def batch_predict(req: BatchPredictRequest) -> BatchPredictResponse:
                 market_u=market_u,
                 model=chosen,
                 payload=raw,
-                artifacts_dir=Path("artifacts"),
+                artifacts_dir=s.artifacts_dir,
             )
             preds.append(
                 BatchPredItem(row_index=idx, market=req.market, model=chosen, prediction=pred)
             )
         except HTTPException as he:
-            # translate back into batch error items
-            # 422 => validation_error, others => inference_error
             err_type = "validation_error" if he.status_code == 422 else "inference_error"
             err = BatchErrorItem(row_index=idx, type=err_type, detail=he.detail)
             if req.strict:
@@ -128,7 +170,10 @@ def batch_predict(req: BatchPredictRequest) -> BatchPredictResponse:
 
 
 if __name__ == "__main__":
-    # Optional: allow running as `python -m ucpp.api.app`
+    import os
+
     import uvicorn
 
-    uvicorn.run("ucpp.api.app:app", host="127.0.0.1", port=8000, reload=True)
+    host = os.getenv("UCPP_HOST", "127.0.0.1")
+    port = int(os.getenv("UCPP_PORT", "8000"))
+    uvicorn.run("ucpp.api.app:app", host=host, port=port, reload=True)
