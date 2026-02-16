@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 Market = Literal["IN", "US"]
 
@@ -14,6 +14,38 @@ def _strip_or_none(v: Any) -> str | None:
     if s == "" or s.lower() in {"nan", "none"}:
         return None
     return s
+
+
+def _require_any_non_null(
+    *,
+    market: str,
+    cleaned: dict[str, Any],
+    required_any_of: list[str],
+) -> None:
+    """
+    Guardrail for batch (and single) inference:
+    - We still allow partial rows (many fields optional).
+    - But we reject completely empty / unusable rows (e.g. {} or all-null after cleaning).
+
+    Raises pydantic.ValidationError so existing callers (API + batch CLI) treat it as schema invalid.
+    """
+    if any(cleaned.get(k) is not None for k in required_any_of):
+        return
+
+    msg = f"empty payload: provide at least one of {required_any_of} for market={market}"
+
+    # Create a pydantic.ValidationError so existing handlers catch it as schema validation failure.
+    raise ValidationError.from_exception_data(
+        "Payload",
+        [
+            {
+                "type": "value_error",
+                "loc": ("payload",),
+                "msg": msg,
+                "input": cleaned,
+            }
+        ],
+    )
 
 
 class _BasePayload(BaseModel):
@@ -103,10 +135,35 @@ class UsPayload(_BasePayload):
 
 def validate_payload(market: str, payload: dict[str, Any]) -> dict[str, Any]:
     m = market.upper()
+
     if m == "IN":
         obj = InPayload.model_validate(payload)
-        return obj.cleaned_dict()
+        clean = obj.cleaned_dict()
+
+        # Minimal viability: reject fully empty rows ({} or all-null after cleaning)
+        _require_any_non_null(
+            market="IN",
+            cleaned=clean,
+            required_any_of=[
+                "Name",
+                "Location",
+                "Year",
+                "Kilometers_Driven",
+                "Fuel_Type",
+                "Transmission",
+            ],
+        )
+        return clean
+
     if m == "US":
         obj = UsPayload.model_validate(payload)
-        return obj.cleaned_dict()
+        clean = obj.cleaned_dict()
+
+        _require_any_non_null(
+            market="US",
+            cleaned=clean,
+            required_any_of=["brand", "model", "model_year", "milage"],
+        )
+        return clean
+
     raise ValueError("market must be IN or US")
