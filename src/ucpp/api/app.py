@@ -40,6 +40,23 @@ def _settings() -> Settings:
     return Settings(artifacts_dir=Path(raw))
 
 
+def _jsonable_detail(x: Any) -> Any:
+    """
+    Ensure error details are JSON-serializable.
+    This prevents FastAPI/Pydantic from crashing when an exception object (e.g., ValueError)
+    is present in error context (common in pydantic ctx).
+    """
+    if isinstance(x, BaseException):
+        return str(x)
+    if isinstance(x, dict):
+        return {k: _jsonable_detail(v) for k, v in x.items()}
+    if isinstance(x, list):
+        return [_jsonable_detail(v) for v in x]
+    if isinstance(x, tuple):
+        return [_jsonable_detail(v) for v in x]
+    return x
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     # Liveness: process is up.
@@ -156,7 +173,7 @@ def batch_predict(req: BatchPredictRequest) -> BatchPredictResponse:
             )
         except HTTPException as he:
             err_type = "validation_error" if he.status_code == 422 else "inference_error"
-            err = BatchErrorItem(row_index=idx, type=err_type, detail=he.detail)
+            err = BatchErrorItem(row_index=idx, type=err_type, detail=_jsonable_detail(he.detail))
             if req.strict:
                 raise
             errors.append(err)
