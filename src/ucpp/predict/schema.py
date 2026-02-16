@@ -23,18 +23,17 @@ def _require_any_non_null(
     required_any_of: list[str],
 ) -> None:
     """
-    Guardrail for batch (and single) inference:
-    - We still allow partial rows (many fields optional).
-    - But we reject completely empty / unusable rows (e.g. {} or all-null after cleaning).
+    Reject completely empty / unusable rows (e.g. {} or all-null after cleaning).
 
-    Raises pydantic.ValidationError so existing callers (API + batch CLI) treat it as schema invalid.
+    Must raise *pydantic.ValidationError* (correctly constructed) so API can map it to 422
+    and batch(non-strict) marks it as validation_error.
     """
     if any(cleaned.get(k) is not None for k in required_any_of):
         return
 
     msg = f"empty payload: provide at least one of {required_any_of} for market={market}"
 
-    # Create a pydantic.ValidationError so existing handlers catch it as schema validation failure.
+    # Pydantic v2 expects ctx["error"] for value_error
     raise ValidationError.from_exception_data(
         "Payload",
         [
@@ -43,6 +42,7 @@ def _require_any_non_null(
                 "loc": ("payload",),
                 "msg": msg,
                 "input": cleaned,
+                "ctx": {"error": msg},
             }
         ],
     )
@@ -79,7 +79,6 @@ class InPayload(_BasePayload):
     Price: float | None = Field(default=None)
 
     def cleaned_dict(self) -> dict[str, Any]:
-        # Use aliases so downstream sees "No. of Doors"
         d = self.model_dump(by_alias=True)
 
         for k in ["Name", "Location", "Fuel_Type", "Transmission", "Owner_Type", "Colour"]:
@@ -88,7 +87,6 @@ class InPayload(_BasePayload):
         for k in ["Mileage", "Engine", "Power", "New_Price"]:
             d[k] = _strip_or_none(d.get(k))
 
-        # "No. of Doors" stays numeric; no string normalization needed.
         return d
 
 
@@ -129,7 +127,6 @@ class UsPayload(_BasePayload):
         ]:
             d[k] = _strip_or_none(d.get(k))
 
-        # price can be str/float/None; leave it (transform_us drops it anyway)
         return d
 
 
@@ -140,7 +137,6 @@ def validate_payload(market: str, payload: dict[str, Any]) -> dict[str, Any]:
         obj = InPayload.model_validate(payload)
         clean = obj.cleaned_dict()
 
-        # Minimal viability: reject fully empty rows ({} or all-null after cleaning)
         _require_any_non_null(
             market="IN",
             cleaned=clean,
