@@ -261,4 +261,4 @@ Environment variables:
 
 ## License 📝
 
-Private/experimental project. Add a license if you intend to open-source.
+MIT © 2026 Deepesh Kumar Gupta. See [LICENSE](LICENSE) for details.
